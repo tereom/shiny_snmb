@@ -1,0 +1,297 @@
+---
+title: "Buscador de fauna"
+output: html_document
+runtime: shiny
+---
+
+```{r leer_paquetes, echo=FALSE, warning=FALSE, message=FALSE, }
+library(plyr)
+library(dplyr)
+library(tidyr)
+library(shiny)
+library(rgdal)
+#library(gpclib)
+#gpc <- gpclibPermit()
+library(DT)
+library(leaflet)
+```
+
+```{r conexion_base, cache=TRUE, echo=FALSE, warning=FALSE, message=FALSE}
+dir_base <- list.files(path = ".", recursive = TRUE, full.names = TRUE, 
+  pattern = "\\.sqlite$")
+base_input <- src_sqlite(dir_base)
+
+especieInv <- function(noms, etiqueta){
+  # noms: string que indica los nombres a agrupar separados por pipes, ej.
+  #   "Bos|taurus|vaca"
+  # etiquta: nombre a usar, ej. "vaca"
+  
+  conglomerado <- tbl(base_input, "Conglomerado_muestra") %>%
+    collect() %>%
+    select(conglomerado_muestra_id = id, nombre, estado, municipio, 
+      uso = uso_suelo_tipo)
+
+  sitio <- tbl(base_input, "Sitio_muestra") %>%
+    collect() %>%
+    select(conglomerado_muestra_id, sitio_muestra_id = id) %>%
+    inner_join(conglomerado, by = "conglomerado_muestra_id") %>%
+    select(sitio_muestra_id, conglomerado_muestra_id, nombre)
+  
+  tr_ei <- tbl(base_input, "Transecto_especies_invasoras_muestra") %>%
+    collect() %>%
+    select(transecto_especies_invasoras_id = id, conglomerado_muestra_id) %>%
+    left_join(conglomerado, by = "conglomerado_muestra_id")
+  
+  ei <- tbl(base_input, "Especie_invasora") %>%
+    collect() %>%
+    mutate(
+      ei_esp = grepl(noms, nombre_comun, ignore.case = TRUE) | 
+        grepl(noms, nombre_cientifico, ignore.case = TRUE)
+      ) %>%
+    select(transecto_especies_invasoras_id, ei_esp) %>%
+    left_join(tr_ei, by = "transecto_especies_invasoras_id") %>%
+    group_by(nombre) %>%
+    summarise(
+      ei_esp = sum(ei_esp, na.rm = TRUE)
+      ) %>%
+    select(nombre, ei_esp)
+  
+  ei_ex <- tbl(base_input, "Especie_invasora_extra") %>%
+    collect() %>%
+    mutate(
+      ei_ex_esp = grepl(noms, nombre_comun, ignore.case = TRUE) | 
+        grepl(noms, nombre_cientifico, ignore.case = TRUE)
+      ) %>%
+    select(conglomerado_muestra_id, ei_ex_esp) %>%
+    right_join(conglomerado, by = "conglomerado_muestra_id") %>%
+    group_by(nombre) %>%
+    summarise(
+      ei_ex_esp = sum(ei_ex_esp, na.rm = TRUE)
+      )
+  
+  er_ex <- tbl(base_input, "Especimen_restos_extra") %>%
+    collect() %>%
+    mutate(
+      er_ex_esp = grepl(noms, nombre_comun, ignore.case = TRUE) | 
+        grepl(noms, nombre_cientifico, ignore.case = TRUE)
+      ) %>%
+    select(conglomerado_muestra_id, er_ex_esp) %>%
+    right_join(conglomerado, by = "conglomerado_muestra_id") %>%
+    group_by(nombre) %>%
+    summarise(
+      er_ex_esp = sum(er_ex_esp, na.rm = TRUE)
+      )
+  
+  tr_he <- tbl(base_input, "Transecto_huellas_excretas_muestra") %>%
+    collect() %>%
+    select(transecto_huellas_excretas_id = id, conglomerado_muestra_id) %>%
+    left_join(conglomerado, by = "conglomerado_muestra_id")
+  
+  he <- tbl(base_input, "Huella_excreta") %>%
+    collect() %>%
+    mutate(
+      he_esp = grepl(noms, nombre_comun, ignore.case = TRUE) | 
+        grepl(noms, nombre_cientifico, ignore.case = TRUE)
+      ) %>%
+    select(transecto_huellas_excretas_id, he_esp) %>%
+    left_join(tr_he, by = "transecto_huellas_excretas_id") %>%
+    group_by(nombre) %>%
+    summarise(
+      he_esp = sum(he_esp, na.rm = TRUE)
+      ) %>%
+    select(nombre, he_esp)
+  
+  he_ex <- tbl(base_input, "Huella_excreta_extra") %>%
+    collect() %>%
+    mutate(
+      he_ex_esp = grepl(noms, nombre_comun, ignore.case = TRUE) | 
+        grepl(noms, nombre_cientifico, ignore.case = TRUE)
+      ) %>%
+    select(conglomerado_muestra_id, he_ex_esp) %>%
+    right_join(conglomerado, by = "conglomerado_muestra_id") %>%
+    group_by(nombre) %>%
+    summarise(
+      he_ex_esp = sum(he_ex_esp, na.rm = TRUE)
+      )
+  
+  camara <- tbl(base_input, "Camara") %>%
+    collect() %>%
+    select(camara_id = id, sitio_muestra_id) %>%
+    left_join(sitio, by = "sitio_muestra_id") 
+  
+  ar_camara <- tbl(base_input, "Archivo_camara") %>%
+    collect() %>%
+    mutate(
+      camara_esp = grepl(noms, nombre_comun, ignore.case = TRUE) | 
+        grepl(noms, nombre_cientifico, ignore.case = TRUE)
+      ) %>%
+    select(camara_id, camara_esp) %>%
+    left_join(camara, by = "camara_id") %>%
+    group_by(nombre) %>%
+    summarise(
+      camara_esp = sum(camara_esp, na.rm = TRUE)
+      )
+  naZero <- function(x){
+    ifelse(is.na(x), 0, (x > 0)*1)
+  }
+  desagregado <- conglomerado %>%
+    left_join(ei) %>%
+    left_join(he) %>%
+    left_join(ei_ex) %>%
+    left_join(he_ex) %>%
+    left_join(er_ex) %>%
+    left_join(ar_camara) %>%
+    mutate_each(funs(naZero), contains("esp"))
+  presencia <- desagregado %>%
+    mutate(pres = (ei_esp + he_esp + ei_ex_esp + he_ex_esp + er_ex_esp + 
+        camara_esp) > 0) %>%
+    filter(pres) %>%
+    select(id = nombre, pres)
+  list(desagregado = desagregado, presencia = presencia)
+}
+
+caracter <- function(x){
+  ifelse(x == 0, "-", "   +")
+}
+
+load("../datos/mallaSiNaMBioD_2.Rdata")
+load(file="../datos/edo_df.Rdata")
+
+conglomerado_ids <- tbl(base_input, "Conglomerado_muestra") %>%
+  collect() %>%
+  mutate(id = as.numeric(nombre)) %>%
+  `$`("id")
+
+malla <- malla %>% filter(id %in% conglomerado_ids)
+```
+
+```{r input_datos, echo=FALSE, eval = TRUE}
+#save(edo_df, file="../datos/edo_df.Rdata")
+
+wellPanel(
+  textInput("especies", label = "Nombre:", value = "vaca|taurus|caballo|equus"),
+  helpText("Ingresa el nombre o nombres (común y/o científico) de los animales 
+    a buscar, los nombres deben estar separados por el símbolo '|'. Ejemplo:
+    vaca|taurus|caballo|equus"),    
+  actionButton("actualiza", "actualiza", icon("refresh"))
+)
+
+# expresión reactiva de los datos que se ingresan
+animal_mult <- eventReactive(input$actualiza, {  
+  especieInv(input$especies, input$especies[1])
+})
+```
+
+
+```{r mapa, echo = FALSE}
+edo_shp <- readOGR("../datos/estados", "Mex_Edos", verbose = FALSE)  
+
+
+output$mapa_base <- renderLeaflet({
+  leaflet() %>% 
+    addTiles() %>%
+    fitBounds(lng1 = -117.82, lat1 = 32.64, lng2 = -84.91, lat2 = 13.39) %>%
+    addCircleMarkers(data = malla,
+      lng =~lng, lat=~lat, 
+      popup=~paste("cgl:", id), 
+      stroke = FALSE,
+      fillOpacity = 0.4, 
+      radius = 2,
+      color = ~"navy",
+      group = "base")
+})
+
+
+observeEvent(input$actualiza, {
+  animales <- animal_mult()[[2]] %>%
+    mutate(id = as.numeric(id)) %>%
+    inner_join(malla, by = "id")
+  
+  leafletProxy("mapa_base", data = animales) %>% 
+    # clearCircleMarkers() %>%
+    clearGroup(group = "obs") %>%
+    clearGroup(group = "highlights") %>%
+    addCircleMarkers(
+      lng =~lng, lat=~lat, 
+      popup=~paste("cgl:", id), 
+      stroke = FALSE,
+      fillOpacity = 0.8, 
+      radius = 4,
+      color = ~"red",
+      group = "obs")
+})
+
+
+
+observeEvent(input$tbl_rows_selected, {
+  animales <- animal_mult()[[2]] %>%
+    mutate(id = as.numeric(id)) %>%
+    inner_join(malla, by = "id") %>%
+    arrange(id) 
+  
+  animales_sub <- animales[as.numeric(input$tbl_rows_selected), drop=FALSE]
+  
+  leafletProxy("mapa_base", data = animales_sub) %>% 
+    clearGroup(group = "highlights") %>%
+    addCircleMarkers(
+      lng =~lng, lat=~lat, 
+      popup=~paste("cgl:", id), 
+      #stroke = FALSE,
+      #fillOpacity = 1, 
+      radius = 8,
+      weight = 2,
+      #color = ~"red",
+      group = "highlights")
+})
+
+leafletOutput("mapa_base")
+
+# renderPrint({
+#     cat('Rows on the current page:\n\n')
+#     cat(input$tbl_rows_current, sep = ', ')
+#     cat('\n\nAll rows:\n\n')
+#     cat(input$tbl_rows_all, sep = ', ')
+#     cat('\n\nSelected rows:\n\n')
+#     cat(input$tbl_rows_selected, sep = ', ')
+#   })
+
+```
+
+<br/>
+
+### Fuentes de información
+
+*EI*: observaciones en transectos de especies invasoras,
+*HE*: observaciones en transectos de huellas excretas, 
+*EI ex*: observaciones oportunistas de especies invasoras,
+*HE ex*: observaciones oportunistas de huellas excretas,
+*ER ex*: observaciones oportunistas de especimenes o restos,
+*Cámara*: fotografías de trampa cámara clasificadas por brigadistas.
+
+```{r crear_tabla, echo=FALSE, eval = TRUE}
+output$tbl <- DT::renderDataTable({
+  tab <- animal_mult()[[1]] %>%
+    mutate(
+      pres = (ei_esp + he_esp + ei_ex_esp + he_ex_esp + er_ex_esp + 
+        camara_esp) > 0,
+      id = as.numeric(nombre)
+      ) %>%
+    filter(pres) %>% 
+    # solo imprimir cgls que tienen coordenadas asignadas
+    semi_join(malla, by  = "id") %>%
+    arrange(id) %>%
+    select(-conglomerado_muestra_id, -pres, -id) %>%
+    mutate_each(funs(caracter), contains("esp"))
+  
+  colnames(tab) = c("Id", "Estado", "municipio", "Uso suelo", "EI", "HE", 
+    "EI ex", "HE ex", "ER ex", "Cámara")
+  tab}, 
+  options = list(
+    lengthMenu = c(5, 10, 15, 20, -1), 
+    pageLength = 15, 
+    columnDefs = list(
+      list(className = 'dt-center', targets = c(5, 6, 7, 8, 9, 10)))
+  ))
+
+DT::dataTableOutput("tbl")
+```
