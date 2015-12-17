@@ -154,8 +154,8 @@ caracter <- function(x){
   ifelse(x == 0, "-", "   +")
 }
 
-load("../datos/mallaSiNaMBioD_2.Rdata")
-load(file="../datos/edo_df.Rdata")
+load("../../datos/mallaSiNaMBioD_2.Rdata")
+load(file="../../datos/edo_df.Rdata")
 
 conglomerado_ids <- tbl(base_input, "Conglomerado_muestra") %>%
   collect() %>%
@@ -166,8 +166,6 @@ malla <- malla %>% filter(id %in% conglomerado_ids)
 ```
 
 ```{r input_datos, echo=FALSE, eval = TRUE}
-#save(edo_df, file="../datos/edo_df.Rdata")
-
 wellPanel(
   textInput("especies", label = "Nombre:", value = "vaca|taurus|caballo|equus"),
   helpText("Ingresa el nombre o nombres (común y/o científico) de los animales 
@@ -184,12 +182,11 @@ animal_mult <- eventReactive(input$actualiza, {
 
 
 ```{r mapa, echo = FALSE}
-edo_shp <- readOGR("../datos/estados", "Mex_Edos", verbose = FALSE)  
-
+#edo_shp <- readOGR("../datos/estados", "Mex_Edos", verbose = FALSE)  
 
 output$mapa_base <- renderLeaflet({
   leaflet() %>% 
-    addTiles() %>%
+    addTiles(options =  providerTileOptions(opacity = 0.75)) %>%
     fitBounds(lng1 = -117.82, lat1 = 32.64, lng2 = -84.91, lat2 = 13.39) %>%
     addCircleMarkers(data = malla,
       lng =~lng, lat=~lat, 
